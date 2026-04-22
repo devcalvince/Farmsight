@@ -1,0 +1,9 @@
+%%writefile requirements.txt
+streamlit
+folium
+streamlit-folium
+psycopg2-binary
+requests
+africastalking
+earthengine-api
+pandas
