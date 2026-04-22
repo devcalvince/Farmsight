@@ -1,28 +1,133 @@
-# Farmsight
-FarmSight Crop Health Monitoring System
-This project provides a robust system for monitoring crop health using satellite imagery, weather data, and PostgreSQL with PostGIS for spatial data management. It leverages Google Earth Engine (GEE) for NDVI calculations, Open-Meteo for irrigation advice, and Africa's Talking for SMS alerts to farmers. A Streamlit dashboard offers a user-friendly interface for visualization and monitoring.
+🌾 FarmSight – Agricultural Intelligence System
 
-Features
-NDVI Calculation: Utilizes Sentinel-2 satellite data via Google Earth Engine to compute Normalized Difference Vegetation Index (NDVI) for farm plots.
-Time-Series Analysis: Implements a rolling average to detect significant drops in crop health and trigger alerts.
-Weather Integration: Fetches real-time precipitation forecasts to provide context-aware irrigation advice.
-SMS Alerts: Notifies farmers via SMS about critical changes in crop health and recommended actions.
-PostGIS Database: Stores farm geometries, farmer details, and NDVI history efficiently.
-Streamlit Dashboard: Provides an interactive web interface to visualize farm locations, NDVI trends, and alert logs.
-Components
-settings.py: Manages API keys and database connection strings securely using Colab secrets.
-database.py: Handles all database operations, including schema initialization, adding farmers, and data cleanup.
-ndvi_engine.py: Contains the logic for fetching and calculating NDVI from GEE.
-weather_engine.py: Provides functions to retrieve weather data and generate irrigation advice.
-alert_engine.py: Manages sending SMS alerts to farmers.
-streamlit_app.py: The main script for the Streamlit web dashboard.
-Setup and Usage
-Install Dependencies: Run pip install -r requirements.txt (or the individual packages listed).
-Google Earth Engine (GEE) Setup:
-Authenticate with ee.Authenticate().
-Initialize GEE with your GEE_PROJECT_ID.
-Colab Secrets: Set up DB_URL, AT_API_KEY, and GEE_PROJECT_ID as Colab secrets.
-Database Initialization: Run the init_db function to set up your PostgreSQL database.
-Add Farmers: Use the add_farmer function to register farm plots.
-Run Time-Series Check: Execute the run_time_series_check function to perform NDVI analysis and trigger alerts.
-Launch Streamlit Dashboard: Run streamlit run streamlit_app.py in your terminal or Colab cell.
+FarmSight is a satellite-driven agricultural intelligence platform that helps farmers and agricultural organizations monitor crop health, detect stress early, and receive actionable recommendations using AI, remote sensing, and weather forecasting.
+
+It bridges the gap between space-based data and real-world farming decisions in low-resource environments.
+
+🚨 Problem Statement
+
+Farmers often make decisions without real-time field data.
+
+This leads to:
+
+Low crop yield
+Delayed disease detection
+Inefficient irrigation
+Poor resource allocation
+
+FarmSight solves this by turning satellite imagery into simple, actionable SMS-based insights.
+
+🧠 System Overview
+
+FarmSight integrates multiple data sources:
+
+Satellite imagery (Sentinel-2)
+Weather forecasting (Open-Meteo API)
+Spatial database (PostgreSQL + PostGIS)
+SMS alerts (Africa’s Talking)
+AI-based trend detection
+⚙️ Core Features
+🌱 Crop Health Monitoring
+
+NDVI-based vegetation analysis using Sentinel-2 imagery.
+
+📈 Time-Series Intelligence
+
+Rolling average + trend detection for anomaly identification.
+
+🌦 Irrigation Advisory System
+
+Weather-based irrigation recommendations using Open-Meteo.
+
+📩 SMS Alert System
+
+Real-time alerts sent to farmers via Africa’s Talking.
+
+🗺 Spatial Farm Mapping
+
+PostGIS-powered farm polygon storage and queries.
+
+📊 Streamlit Dashboard
+
+Interactive visualization of farms, NDVI trends, and alerts.
+
+🏗 System Architecture
+Satellite Data (Sentinel-2)
+        ↓
+NDVI Processing Engine
+        ↓
+Time-Series Trend Analyzer
+        ↓
+Weather API Integration
+        ↓
+Decision Engine (Risk + Irrigation Logic)
+        ↓
+PostGIS Database
+        ↓
+SMS Alert System
+        ↓
+Streamlit Dashboard
+📁 Project Structure
+farmsight/
+│
+├── backend/
+│   ├── ndvi_engine.py
+│   ├── weather_engine.py
+│   ├── alert_engine.py
+│   ├── database.py
+│
+├── app/
+│   ├── streamlit_app.py
+│
+├── config/
+│   ├── settings.py
+│
+├── requirements.txt
+└── README.md
+🚀 Setup & Installation
+1. Install dependencies
+pip install -r requirements.txt
+2. Environment Variables
+
+Set the following securely:
+
+DB_URL → PostgreSQL connection string
+AT_API_KEY → Africa’s Talking API key
+GEE_PROJECT_ID → Google Earth Engine project ID
+3. Google Earth Engine Setup
+ee.Authenticate()
+ee.Initialize(project=GEE_PROJECT_ID)
+4. Initialize Database
+from database import init_db
+init_db()
+5. Add Test Farmers
+add_farmer(...)
+6. Run System
+NDVI Pipeline
+run_time_series_check()
+Dashboard
+streamlit run streamlit_app.py
+📊 Key Technologies
+Google Earth Engine
+Sentinel-2 Satellite Data
+PostgreSQL + PostGIS
+Streamlit
+Open-Meteo API
+Africa’s Talking SMS API
+🧪 MVP Status
+
+✔ Crop Health Monitoring
+✔ Time-Series NDVI Analysis
+✔ SMS Alert System
+✔ Weather-Based Irrigation Advice
+✔ Spatial Database Integration
+⚠ Farm Boundary UI (manual GeoJSON)
+
+🌍 Future Vision
+
+FarmSight will evolve into a full agricultural intelligence and fintech system providing:
+
+Crop yield prediction
+Climate risk forecasting
+Farm credit scoring (Farm Trust Score)
+Agricultural supply chain optimization
