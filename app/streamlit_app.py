@@ -1,22 +1,39 @@
+# -----------------------------
+# IMPORT FIX (CRITICAL FOR RENDER)
+# -----------------------------
+import sys
+import os
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# -----------------------------
+# IMPORTS
+# -----------------------------
 import streamlit as st
 import psycopg2
 import pandas as pd
 import json
-import settings
-import database
+from config import settings
+from backend import database
 import plotly.express as px
-from weather_engine import get_irrigation_advice
+from backend.weather_engine import get_irrigation_advice
 
-@st.cache_data(ttl=3600)  # Cache weather for 1 hour
+# -----------------------------
+# CACHE (SAVE API CALLS)
+# -----------------------------
+@st.cache_data(ttl=3600)
 def cached_irrigation_advice(lon, lat):
     return get_irrigation_advice(lon, lat)
 
+# -----------------------------
+# PAGE CONFIG
+# -----------------------------
 st.set_page_config(page_title="FarmSight Dashboard", layout="wide")
 
 st.title("🌾 FarmSight Agricultural Intelligence Dashboard")
 
 # -----------------------------
-# DB CONNECTION
+# DATABASE CONNECTION
 # -----------------------------
 conn = database.connect_db(settings.DB_URL)
 cur = conn.cursor()
@@ -30,6 +47,7 @@ farm_data = cur.fetchall()
 
 farm_locations = []
 alert_logs = []
+ndvi_series = {}
 
 # -----------------------------
 # PROCESS DATA
@@ -39,7 +57,9 @@ for farm in farm_data:
 
     geo = json.loads(geojson_str)
 
-    # ✅ SAFE CENTROID 
+    # -----------------------------
+    # SAFE CENTROID CALCULATION
+    # -----------------------------
     coords = geo["coordinates"][0]
     lons = [c[0] for c in coords]
     lats = [c[1] for c in coords]
@@ -57,7 +77,16 @@ for farm in farm_data:
     })
 
     # -----------------------------
-    # REAL INSIGHT LAYER
+    # NDVI HISTORY (FOR CHART)
+    # -----------------------------
+    if history:
+        try:
+            ndvi_series[name] = history
+        except:
+            pass
+
+    # -----------------------------
+    # STATUS LOGIC
     # -----------------------------
     if last_ndvi is None:
         status = "⚪ No Data"
@@ -68,9 +97,11 @@ for farm in farm_data:
     else:
         status = "🔴 At Risk"
 
-    # Irrigation advice (real value layer)
+    # -----------------------------
+    # WEATHER + IRRIGATION
+    # -----------------------------
     try:
-        advice = get_irrigation_advice(lon, lat)
+        advice = cached_irrigation_advice(lon, lat)
     except:
         advice = "⚠ Weather unavailable"
 
@@ -79,23 +110,28 @@ for farm in farm_data:
         "Crop": crop,
         "NDVI": round(last_ndvi or 0, 3),
         "Status": status,
-        "Irrigation": advice
+        "Irrigation Advice": advice
     })
 
 cur.close()
 conn.close()
 
+# -----------------------------
+# DATAFRAMES
+# -----------------------------
 df = pd.DataFrame(farm_locations)
 df_alerts = pd.DataFrame(alert_logs)
 
 # -----------------------------
 # KPI METRICS
 # -----------------------------
+st.subheader("📊 System Overview")
+
 col1, col2, col3 = st.columns(3)
 
 col1.metric("🌾 Total Farms", len(df))
 col2.metric("👨‍🌾 Farmers", df["farmer"].nunique() if not df.empty else 0)
-col3.metric("📊 Avg NDVI", round(df["ndvi"].mean(), 3) if not df.empty else 0)
+col3.metric("📈 Avg NDVI", round(df["ndvi"].mean(), 3) if not df.empty else 0)
 
 st.divider()
 
@@ -119,14 +155,25 @@ if not df.empty:
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
-# ALERT + INSIGHTS TABLE
+# NDVI TIME SERIES (NEW 🔥)
+# -----------------------------
+st.subheader("📈 NDVI Trends (Per Farmer)")
+
+if ndvi_series:
+    df_history = pd.DataFrame.from_dict(ndvi_series, orient="index").transpose()
+    st.line_chart(df_history)
+else:
+    st.info("No NDVI history available yet.")
+
+# -----------------------------
+# ALERT TABLE
 # -----------------------------
 st.subheader("🚨 Farm Insights & Recommendations")
 
 st.dataframe(df_alerts, use_container_width=True)
 
 # -----------------------------
-# FOOTER INSIGHT
+# FOOTER
 # -----------------------------
 st.info(
     "FarmSight converts satellite NDVI + weather data into actionable farming decisions."
