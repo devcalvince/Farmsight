@@ -1,108 +1,133 @@
-%%writefile streamlit_app.py
 import streamlit as st
 import psycopg2
 import pandas as pd
 import json
 import settings
 import database
+import plotly.express as px
+from weather_engine import get_irrigation_advice
 
-st.title("FarmSight Dashboard")
+@st.cache_data(ttl=3600)  # Cache weather for 1 hour
+def cached_irrigation_advice(lon, lat):
+    return get_irrigation_advice(lon, lat)
 
-# --- Fetch Data from Database ---
+st.set_page_config(page_title="FarmSight Dashboard", layout="wide")
+
+st.title("🌾 FarmSight Agricultural Intelligence Dashboard")
+
+# -----------------------------
+# DB CONNECTION
+# -----------------------------
 conn = database.connect_db(settings.DB_URL)
 cur = conn.cursor()
 
-# Fetch farm locations and details
-cur.execute("SELECT id, farmer_name, crop_type, ST_AsGeoJSON(geom), last_ndvi, ndvi_history FROM farms;")
+cur.execute("""
+    SELECT id, farmer_name, crop_type, ST_AsGeoJSON(geom), last_ndvi, ndvi_history
+    FROM farms;
+""")
+
 farm_data = cur.fetchall()
 
-# Prepare data for Streamlit
 farm_locations = []
 alert_logs = []
-ndvi_history_data = {}
 
+# -----------------------------
+# PROCESS DATA
+# -----------------------------
 for farm in farm_data:
-    fid, name, crop, geojson_str, last_ndvi, history_json = farm
-    geojson_obj = json.loads(geojson_str)
+    fid, name, crop, geojson_str, last_ndvi, history = farm
 
-    # For st.map, we need central coordinates (e.g., centroid of the polygon)
-    # This is a simplified approach, a proper centroid calculation might be needed for complex polygons
-    # For simplicity, let's use the first coordinate of the first polygon ring as a proxy
-    if geojson_obj and geojson_obj['coordinates']:
-        lon = geojson_obj['coordinates'][0][0][0]
-        lat = geojson_obj['coordinates'][0][0][1]
-    else:
-        lon, lat = 0, 0 # Fallback for invalid geometry
+    geo = json.loads(geojson_str)
+
+    # ✅ SAFE CENTROID 
+    coords = geo["coordinates"][0]
+    lons = [c[0] for c in coords]
+    lats = [c[1] for c in coords]
+
+    lon = sum(lons) / len(lons)
+    lat = sum(lats) / len(lats)
 
     farm_locations.append({
-        'id': fid,
-        'farmer_name': name,
-        'crop_type': crop,
-        'latitude': lat,
-        'longitude': lon,
-        'last_ndvi': last_ndvi
+        "id": fid,
+        "farmer": name,
+        "crop": crop,
+        "lat": lat,
+        "lon": lon,
+        "ndvi": last_ndvi or 0
     })
 
-    # Store NDVI history for line chart
-    if history_json:
-        ndvi_history_data[name] = history_json
+    # -----------------------------
+    # REAL INSIGHT LAYER
+    # -----------------------------
+    if last_ndvi is None:
+        status = "⚪ No Data"
+    elif last_ndvi >= 0.6:
+        status = "🟢 Healthy"
+    elif last_ndvi >= 0.4:
+        status = "🟡 Moderate"
+    else:
+        status = "🔴 At Risk"
 
-    # Simulate alert logs (based on last_ndvi for demonstration)
-    if last_ndvi < 0.5:
-        alert_logs.append({
-            'Farm ID': fid,
-            'Farmer': name,
-            'Crop': crop,
-            'Last NDVI': f"{last_ndvi:.2f}",
-            'Status': '🔴 Low Vegetation',
-            'Action': 'Alert Sent'
-        })
-    elif last_ndvi < 0.7:
-        alert_logs.append({
-            'Farm ID': fid,
-            'Farmer': name,
-            'Crop': crop,
-            'Last NDVI': f"{last_ndvi:.2f}",
-            'Status': '🟡 Medium Vegetation',
-            'Action': 'Monitor'
-        })
+    # Irrigation advice (real value layer)
+    try:
+        advice = get_irrigation_advice(lon, lat)
+    except:
+        advice = "⚠ Weather unavailable"
+
+    alert_logs.append({
+        "Farmer": name,
+        "Crop": crop,
+        "NDVI": round(last_ndvi or 0, 3),
+        "Status": status,
+        "Irrigation": advice
+    })
 
 cur.close()
 conn.close()
 
-# Convert to DataFrames
-if farm_locations:
-    df_farm_locations = pd.DataFrame(farm_locations)
+df = pd.DataFrame(farm_locations)
+df_alerts = pd.DataFrame(alert_logs)
 
-    # Add a color column based on last_ndvi for st.map
-    def get_ndvi_color(ndvi):
-        if ndvi < 0.5: # Low vegetation
-            return [255, 0, 0] # Red
-        elif ndvi < 0.7: # Medium vegetation
-            return [255, 165, 0] # Orange
-        else: # High vegetation
-            return [0, 255, 0] # Green
+# -----------------------------
+# KPI METRICS
+# -----------------------------
+col1, col2, col3 = st.columns(3)
 
-    df_farm_locations['ndvi_color'] = df_farm_locations['last_ndvi'].apply(get_ndvi_color)
+col1.metric("🌾 Total Farms", len(df))
+col2.metric("👨‍🌾 Farmers", df["farmer"].nunique() if not df.empty else 0)
+col3.metric("📊 Avg NDVI", round(df["ndvi"].mean(), 3) if not df.empty else 0)
 
+st.divider()
+
+# -----------------------------
+# MAP VIEW
+# -----------------------------
+st.subheader("🗺 Farm Locations")
+
+if not df.empty:
+    st.map(df[["lat", "lon"]])
 else:
-    df_farm_locations = pd.DataFrame(columns=['id', 'farmer_name', 'crop_type', 'latitude', 'longitude', 'last_ndvi', 'ndvi_color'])
+    st.warning("No farm data available")
 
-if alert_logs:
-    df_alert_logs = pd.DataFrame(alert_logs)
-else:
-    df_alert_logs = pd.DataFrame(columns=['Farm ID', 'Farmer', 'Crop', 'Last NDVI', 'Status', 'Action'])
+# -----------------------------
+# NDVI DISTRIBUTION
+# -----------------------------
+st.subheader("📊 NDVI Distribution")
 
-# For line chart, create a DataFrame suitable for plotting multiple series
-# This example just plots the raw history for each farmer, needs dates for proper X-axis
-if ndvi_history_data:
-    df_ndvi_history = pd.DataFrame.from_dict(ndvi_history_data, orient='index').transpose()
-    st.subheader("NDVI History")
-    st.line_chart(df_ndvi_history)
+if not df.empty:
+    fig = px.histogram(df, x="ndvi", nbins=10, title="NDVI Spread Across Farms")
+    st.plotly_chart(fig, use_container_width=True)
 
-# --- Streamlit Components ---
-st.subheader("Farm Locations")
-st.map(df_farm_locations, latitude='latitude', longitude='longitude', size='last_ndvi', color='ndvi_color')
+# -----------------------------
+# ALERT + INSIGHTS TABLE
+# -----------------------------
+st.subheader("🚨 Farm Insights & Recommendations")
 
-st.subheader("Alert Log")
-st.dataframe(df_alert_logs)
+st.dataframe(df_alerts, use_container_width=True)
+
+# -----------------------------
+# FOOTER INSIGHT
+# -----------------------------
+st.info(
+    "FarmSight converts satellite NDVI + weather data into actionable farming decisions."
+)

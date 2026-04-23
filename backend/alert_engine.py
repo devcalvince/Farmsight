@@ -1,4 +1,3 @@
-%%writefile alert_engine.py
 import africastalking
 
 def send_farmer_alert(phone, name, crop, delta, irrigation_advice, sms_client):

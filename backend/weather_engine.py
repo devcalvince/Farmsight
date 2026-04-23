@@ -1,4 +1,3 @@
-%%writefile weather_engine.py
 import requests
 
 def get_irrigation_advice(lon, lat):

@@ -1,0 +1,33 @@
+name: FarmSight Weekly Engine
+
+on:
+  schedule:
+    # Runs at 06:00 UTC (9 AM EAT) every Monday
+    - cron: '0 6 * * 1'
+  workflow_dispatch: # Allows me to trigger it manually for testing
+
+jobs:
+  run-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run NDVI Engine
+        env:
+          # Injecting secrets securely
+          DB_URL: ${{ secrets.DB_URL }}
+          AT_API_KEY: ${{ secrets.AT_API_KEY }}
+          GEE_PROJECT_ID: ${{ secrets.GEE_PROJECT_ID }}
+          GEE_JSON_KEY: ${{ secrets.GEE_JSON_KEY }}
+        run: python backend/ndvi_engine.py
