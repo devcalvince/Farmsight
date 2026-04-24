@@ -34,24 +34,11 @@ def authenticate_gee():
 
         raw = raw.strip()
 
-        # 🔥 FIX: repair multiline private_key safely
-        if "-----BEGIN PRIVATE KEY-----" in raw:
-            print("🔧 Repairing multiline private key...")
-
-            # Extract private_key block manually
-            start = raw.find("-----BEGIN PRIVATE KEY-----")
-            end = raw.find("-----END PRIVATE KEY-----") + len("-----END PRIVATE KEY-----")
-
-            key_block = raw[start:end]
-
-            # Convert actual newlines → escaped \n
-            fixed_key = key_block.replace("\n", "\\n")
-
-            # Replace original block
-            raw = raw.replace(key_block, fixed_key)
-
-        # Now safe to parse
-        info = json.loads(raw)
+        try:
+            info = json.loads(raw)
+        except json.JSONDecodeError:
+            fixed = raw.replace("\r", "").replace("\n", "\\n")
+            info = json.loads(fixed)
 
         credentials = service_account.Credentials.from_service_account_info(info)
 
