@@ -21,21 +21,30 @@ MODE = os.getenv("MODE", "SIMULATION")
 
 
 # -----------------------------
-# GEE AUTH (BASE64 FIXED)
+# 🔐 GEE AUTH (AUTO-DETECT RAW OR BASE64)
 # -----------------------------
 def authenticate_gee():
     try:
         print("🔐 Authenticating GEE...")
 
-        b64_key = os.environ.get("GEE_JSON_KEY")
-        if not b64_key:
+        raw_key = os.environ.get("GEE_JSON_KEY")
+
+        if not raw_key:
             raise ValueError("GEE_JSON_KEY missing")
 
-        # Decode Base64 → JSON string
-        json_str = base64.b64decode(b64_key).decode("utf-8")
+        raw_key = raw_key.strip()
 
-        # Convert JSON → dict
-        info = json.loads(json_str)
+        # 🔥 AUTO-DETECT: Base64 vs JSON
+        try:
+            # Try base64 decode
+            decoded = base64.b64decode(raw_key).decode("utf-8")
+            info = json.loads(decoded)
+            print("🔑 Using BASE64 key")
+        except Exception:
+            # Fallback to raw JSON (fix newline corruption)
+            cleaned = raw_key.replace('\r', '').replace('\n', '\\n')
+            info = json.loads(cleaned.replace('\\n', '\n'))
+            print("🔑 Using RAW JSON key")
 
         credentials = service_account.Credentials.from_service_account_info(info)
 
@@ -52,7 +61,7 @@ def authenticate_gee():
 
 
 # -----------------------------
-# NDVI ENGINE
+# 🌱 NDVI ENGINE (IMPROVED)
 # -----------------------------
 def get_smart_ndvi(geojson_obj, start_date, end_date):
     try:
@@ -78,7 +87,7 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
                 start_date.strftime("%Y-%m-%d"),
                 end_date.strftime("%Y-%m-%d"),
             )
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 90))  # relaxed for data availability
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 90))
         )
 
         size = collection.size().getInfo()
@@ -93,21 +102,16 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
             cirrus = qa.bitwiseAnd(1 << 11).eq(0)
             return img.updateMask(cloud.And(cirrus))
 
-        image = (
-            collection.map(mask)
-            .sort("CLOUDY_PIXEL_PERCENTAGE")
-            .first()
-        )
-
-        if image is None:
-            return None
+        # 🔥 USE MEDIAN (more stable than first())
+        image = collection.map(mask).median()
 
         ndvi = image.normalizedDifference(["B8", "B4"]).rename("nd")
 
         result = ndvi.reduceRegion(
             reducer=ee.Reducer.mean(),
             geometry=area,
-            scale=10
+            scale=10,
+            maxPixels=1e9
         )
 
         value = result.get("nd").getInfo()
@@ -122,7 +126,7 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
 
 
 # -----------------------------
-# MAIN ENGINE
+# 🚀 MAIN ENGINE
 # -----------------------------
 def run_intelligence_cycle():
     print("\n🚀 ENGINE STARTING...")
@@ -172,7 +176,7 @@ def run_intelligence_cycle():
         history_list = list(history) if history else []
 
         # -----------------------------
-        # NO DATA HANDLING
+        # NO DATA
         # -----------------------------
         if current_ndvi is None:
             print("   ☁️ No NDVI data")
@@ -195,7 +199,6 @@ def run_intelligence_cycle():
         # TREND LOGIC
         # -----------------------------
         prev = None
-
         for h in reversed(history_list):
             if isinstance(h, dict) and h.get("ndvi") is not None:
                 prev = h["ndvi"]
@@ -214,7 +217,7 @@ def run_intelligence_cycle():
             alert = False
 
         # -----------------------------
-        # UPDATE HISTORY
+        # SAVE
         # -----------------------------
         history_list.append({
             "date": str(new_start),
@@ -224,9 +227,6 @@ def run_intelligence_cycle():
         if len(history_list) > 15:
             history_list.pop(0)
 
-        # -----------------------------
-        # SAVE TO DB
-        # -----------------------------
         cur.execute("""
             UPDATE farms
             SET last_ndvi = %s,
@@ -253,7 +253,7 @@ def run_intelligence_cycle():
 
 
 # -----------------------------
-# ENTRY POINT
+# ENTRY POINT (NON-NEGOTIABLE)
 # -----------------------------
 if __name__ == "__main__":
     print("🚀 BOOTING FARMSIGHT ENGINE...")
