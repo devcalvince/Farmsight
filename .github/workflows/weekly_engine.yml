@@ -22,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'   # 🔥 upgrade (future-safe)
+          python-version: '3.11'
 
       # -----------------------------
       # 3. INSTALL DEPENDENCIES
@@ -33,13 +33,13 @@ jobs:
           pip install -r requirements.txt
 
       # -----------------------------
-      # 4. RUN ENGINE
+      # 4. RUN NDVI ENGINE
       # -----------------------------
       - name: Run NDVI Engine
         env:
           DB_URL: ${{ secrets.DB_URL }}
           AT_API_KEY: ${{ secrets.AT_API_KEY }}
           GEE_PROJECT_ID: ${{ secrets.GEE_PROJECT_ID }}
-          GEE_JSON_KEY: ${{ secrets.GEE_JSON_KEY }}   # 🔥 THIS is what your code needs
+          GEE_JSON_KEY: ${{ secrets.GEE_JSON_KEY }}   # Base64 string
           MODE: SIMULATION
         run: python backend/ndvi_engine.py
