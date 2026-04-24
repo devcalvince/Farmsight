@@ -27,24 +27,31 @@ def authenticate_gee():
     try:
         print("🔐 Authenticating GEE...")
 
-        raw_key = os.environ.get("GEE_JSON_KEY")
+        raw = os.environ.get("GEE_JSON_KEY")
 
-        if not raw_key:
+        if not raw:
             raise ValueError("GEE_JSON_KEY missing")
 
-        raw_key = raw_key.strip()
+        raw = raw.strip()
 
-        # 🔥 AUTO-DETECT: Base64 vs JSON
-        try:
-            # Try base64 decode
-            decoded = base64.b64decode(raw_key).decode("utf-8")
-            info = json.loads(decoded)
-            print("🔑 Using BASE64 key")
-        except Exception:
-            # Fallback to raw JSON (fix newline corruption)
-            cleaned = raw_key.replace('\r', '').replace('\n', '\\n')
-            info = json.loads(cleaned.replace('\\n', '\n'))
-            print("🔑 Using RAW JSON key")
+        # 🔥 FIX: repair multiline private_key safely
+        if "-----BEGIN PRIVATE KEY-----" in raw:
+            print("🔧 Repairing multiline private key...")
+
+            # Extract private_key block manually
+            start = raw.find("-----BEGIN PRIVATE KEY-----")
+            end = raw.find("-----END PRIVATE KEY-----") + len("-----END PRIVATE KEY-----")
+
+            key_block = raw[start:end]
+
+            # Convert actual newlines → escaped \n
+            fixed_key = key_block.replace("\n", "\\n")
+
+            # Replace original block
+            raw = raw.replace(key_block, fixed_key)
+
+        # Now safe to parse
+        info = json.loads(raw)
 
         credentials = service_account.Credentials.from_service_account_info(info)
 
@@ -53,12 +60,11 @@ def authenticate_gee():
             project=os.getenv("GEE_PROJECT_ID")
         )
 
-        print("✅ GEE Authenticated Successfully")
+        print("✅ GEE Authenticated")
 
     except Exception as e:
         print(f"❌ GEE Auth Failed: {e}")
         raise
-
 
 # -----------------------------
 # 🌱 NDVI ENGINE (IMPROVED)
