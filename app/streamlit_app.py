@@ -20,21 +20,21 @@ from backend import database
 from backend.weather_engine import get_irrigation_advice
 
 # -----------------------------
-# PAGE CONFIG (MUST BE FIRST STREAMLIT CALL)
+# PAGE CONFIG (MUST BE FIRST)
 # -----------------------------
 st.set_page_config(page_title="FarmSight Dashboard", layout="wide")
 
 st.title("🌾 FarmSight Agricultural Intelligence Dashboard")
 
 # -----------------------------
-# CACHE WEATHER
+# CACHE WEATHER API
 # -----------------------------
 @st.cache_data(ttl=3600)
 def cached_irrigation_advice(lon, lat):
     return get_irrigation_advice(lon, lat)
 
 # -----------------------------
-# DB CONNECTION
+# DATABASE CONNECTION
 # -----------------------------
 conn = database.connect_db(settings.DB_URL)
 cur = conn.cursor()
@@ -54,20 +54,32 @@ alert_logs = []
 ndvi_series = {}
 
 # -----------------------------
-# SAFE GEO + DATA PROCESSING
+# SAFE PROCESSING
 # -----------------------------
 for fid, name, crop, geojson_str, last_ndvi, history in farm_data:
 
-    geo = json.loads(geojson_str)
+    try:
+        geo = json.loads(geojson_str)
+    except:
+        continue
 
-    # SAFE CENTROID (Polygon only MVP-safe version)
-    coords = geo["coordinates"][0]
+    coords = geo.get("coordinates", None)
+    if not coords:
+        continue
 
-    lons = [c[0] for c in coords]
-    lats = [c[1] for c in coords]
+    # -----------------------------
+    # SAFE CENTROID (Polygon only MVP-safe)
+    # -----------------------------
+    try:
+        ring = coords[0]
+        lons = [c[0] for c in ring]
+        lats = [c[1] for c in ring]
 
-    lon = sum(lons) / len(lons)
-    lat = sum(lats) / len(lats)
+        lon = sum(lons) / len(lons)
+        lat = sum(lats) / len(lats)
+
+    except:
+        continue
 
     farm_locations.append({
         "farmer": name,
@@ -77,23 +89,27 @@ for fid, name, crop, geojson_str, last_ndvi, history in farm_data:
     })
 
     # -----------------------------
-    # NDVI HISTORY NORMALIZATION
+    # CLEAN NDVI HISTORY
     # -----------------------------
+    clean_history = []
+
     if history:
         try:
-            # Accept BOTH formats safely
-            if isinstance(history[0], dict):
-                ndvi_series[name] = history
-            else:
-                ndvi_series[name] = [
-                    {"date": str(i), "ndvi": v}
-                    for i, v in enumerate(history)
-                ]
+            for entry in history:
+
+                # valid format only
+                if isinstance(entry, dict):
+                    if entry.get("date") and entry.get("ndvi") is not None:
+                        clean_history.append(entry)
+
         except:
             pass
 
+    if clean_history:
+        ndvi_series[name] = clean_history
+
     # -----------------------------
-    # STATUS LOGIC
+    # STATUS ENGINE
     # -----------------------------
     if last_ndvi is None:
         status = "⚪ No Data"
@@ -105,7 +121,7 @@ for fid, name, crop, geojson_str, last_ndvi, history in farm_data:
         status = "🔴 At Risk"
 
     # -----------------------------
-    # WEATHER INSIGHT
+    # WEATHER LAYER
     # -----------------------------
     try:
         advice = cached_irrigation_advice(lon, lat)
@@ -117,7 +133,7 @@ for fid, name, crop, geojson_str, last_ndvi, history in farm_data:
         "Crop": crop,
         "NDVI": round(last_ndvi or 0, 3),
         "Status": status,
-        "Irrigation": advice
+        "Irrigation Advice": advice
     })
 
 cur.close()
@@ -162,28 +178,39 @@ if not df.empty:
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
-# NDVI TRENDS (CLEAN VERSION)
+# NDVI TRENDS (SAFE VERSION)
 # -----------------------------
 st.subheader("📈 NDVI Trends")
 
 if ndvi_series:
+
     for name, history in ndvi_series.items():
-        df_hist = pd.DataFrame(history)
 
-        if "date" in df_hist.columns:
-            df_hist["date"] = pd.to_datetime(df_hist["date"])
-            df_hist = df_hist.sort_values("date")
-            st.write(f"👨‍🌾 {name}")
-            st.line_chart(df_hist.set_index("date")["ndvi"])
+        try:
+            df_hist = pd.DataFrame(history)
+
+            if "date" in df_hist.columns:
+                df_hist["date"] = pd.to_datetime(df_hist["date"], errors="coerce")
+                df_hist = df_hist.dropna(subset=["date"])
+                df_hist = df_hist.sort_values("date")
+
+                if not df_hist.empty:
+                    st.write(f"👨‍🌾 {name}")
+                    st.line_chart(df_hist.set_index("date")["ndvi"])
+
+        except:
+            continue
 
 # -----------------------------
-# ALERTS TABLE
+# ALERT TABLE
 # -----------------------------
-st.subheader("🚨 Insights")
+st.subheader("🚨 Insights & Recommendations")
 
 st.dataframe(df_alerts, use_container_width=True)
 
 # -----------------------------
 # FOOTER
 # -----------------------------
-st.info("FarmSight transforms satellite NDVI + weather into actionable farming intelligence.")
+st.info(
+    "FarmSight converts satellite NDVI + weather into actionable farming intelligence."
+)
