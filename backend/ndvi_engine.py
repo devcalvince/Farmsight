@@ -28,26 +28,37 @@ def authenticate_gee():
         print("🔐 Authenticating GEE...")
 
         raw = os.environ.get("GEE_JSON_KEY")
-
         if not raw:
             raise ValueError("GEE_JSON_KEY missing")
 
         raw = raw.strip()
 
+        # Try to parse; if it fails, fix common GitHub Secret formatting issues
         try:
             info = json.loads(raw)
         except json.JSONDecodeError:
+            print("🔧 Repairing JSON formatting...")
             fixed = raw.replace("\r", "").replace("\n", "\\n")
             info = json.loads(fixed)
 
-        credentials = service_account.Credentials.from_service_account_info(info)
+        # ✅ THE CRITICAL ADDITION: Define the scopes for GEE
+        scopes = [
+            'https://googleapis.com',
+            'https://googleapis.com'
+        ]
+
+        # Use 'from_service_account_info' with the explicit scopes
+        credentials = service_account.Credentials.from_service_account_info(
+            info, 
+            scopes=scopes
+        )
 
         ee.Initialize(
             credentials=credentials,
             project=os.getenv("GEE_PROJECT_ID")
         )
 
-        print("✅ GEE Authenticated")
+        print("✅ GEE Authenticated Successfully")
 
     except Exception as e:
         print(f"❌ GEE Auth Failed: {e}")
