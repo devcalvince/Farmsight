@@ -5,8 +5,11 @@ import sys
 from google.oauth2 import service_account
 from datetime import datetime, timedelta
 
-# Fix imports
+# -----------------------------
+# FIX IMPORT PATHS (CRITICAL)
+# -----------------------------
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from config import settings
 from backend import database
 
@@ -15,17 +18,18 @@ from backend import database
 # -----------------------------
 MODE = os.getenv("MODE", "SIMULATION")
 
+
 # -----------------------------
-# GEE AUTH
+# GEE AUTHENTICATION
 # -----------------------------
 def authenticate_gee():
     try:
+        print("🔐 Authenticating GEE...")
+
         json_key = os.environ.get("GEE_JSON_KEY")
-
         if not json_key:
-            raise ValueError("GEE_JSON_KEY is missing")
+            raise ValueError("GEE_JSON_KEY missing")
 
-        # Fix GitHub secrets formatting issues
         info = json.loads(json_key.replace("\\n", "\n"))
 
         credentials = service_account.Credentials.from_service_account_info(info)
@@ -43,7 +47,7 @@ def authenticate_gee():
 
 
 # -----------------------------
-# NDVI ENGINE
+# NDVI CALCULATION
 # -----------------------------
 def get_smart_ndvi(geojson_obj, start_date, end_date):
     try:
@@ -57,8 +61,10 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
         elif g_type == "MultiPolygon":
             area = ee.Geometry.MultiPolygon(geojson_obj["coordinates"])
         else:
-            print("❌ Invalid geometry type")
+            print("❌ Invalid geometry")
             return None
+
+        print(f"   🛰 Fetching imagery {start_date} → {end_date}")
 
         collection = (
             ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
@@ -67,13 +73,16 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
                 start_date.strftime("%Y-%m-%d"),
                 end_date.strftime("%Y-%m-%d"),
             )
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 80))  # relaxed
         )
 
-        if collection.size().getInfo() == 0:
+        size = collection.size().getInfo()
+        print(f"   📡 Images found: {size}")
+
+        if size == 0:
             return None
 
-        # Cloud masking
+        # Cloud mask
         def mask(img):
             qa = img.select("QA60")
             mask = qa.bitwiseAnd(1 << 10).eq(0).And(
@@ -87,9 +96,6 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
             .first()
         )
 
-        if image is None:
-            return None
-
         ndvi = image.normalizedDifference(["B8", "B4"]).rename("nd")
 
         result = ndvi.reduceRegion(
@@ -98,7 +104,11 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
             scale=10
         )
 
-        return result.get("nd").getInfo()
+        value = result.get("nd").getInfo()
+
+        print(f"   🌱 NDVI VALUE: {value}")
+
+        return value
 
     except Exception as e:
         print(f"⚠️ NDVI Error: {e}")
@@ -109,10 +119,12 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
 # MAIN ENGINE
 # -----------------------------
 def run_intelligence_cycle():
-    print(f"\n🌍 FarmSight Engine | MODE: {MODE}")
+    print("\n🚀 ENGINE STARTING...")
+    print(f"🌍 MODE: {MODE}")
 
     authenticate_gee()
 
+    print("📡 Connecting to DB...")
     conn = database.connect_db(settings.DB_URL)
     cur = conn.cursor()
 
@@ -124,7 +136,15 @@ def run_intelligence_cycle():
 
     farms = cur.fetchall()
 
+    print(f"📊 FOUND {len(farms)} FARMS")
+
+    if len(farms) == 0:
+        print("❌ NO FARMS FOUND → CHECK DATABASE")
+        return
+
     for fid, name, geojson_str, last_date, history, phone in farms:
+
+        print(f"\n👨‍🌾 Processing: {name}")
 
         # -----------------------------
         # TIME ENGINE
@@ -137,14 +157,9 @@ def run_intelligence_cycle():
             step = 1
 
         new_start = base_date + timedelta(days=step)
+        new_end = new_start + timedelta(days=10)
 
-        # LIVE MODE FIX (no fake future data)
-        if MODE == "LIVE":
-            new_end = new_start
-        else:
-            new_end = new_start + timedelta(days=5)
-
-        print(f"\n👨‍🌾 {name} | {new_start} → {new_end}")
+        print(f"   ⏳ Window: {new_start} → {new_end}")
 
         # -----------------------------
         # NDVI FETCH
@@ -152,12 +167,14 @@ def run_intelligence_cycle():
         geojson = json.loads(geojson_str)
         current_ndvi = get_smart_ndvi(geojson, new_start, new_end)
 
-        # -----------------------------
-        # HANDLE NO DATA
-        # -----------------------------
         history_list = list(history) if history else []
 
+        # -----------------------------
+        # NO DATA CASE
+        # -----------------------------
         if current_ndvi is None:
+            print("   ☁️ No NDVI data")
+
             history_list.append({
                 "date": str(new_start),
                 "ndvi": None
@@ -170,7 +187,6 @@ def run_intelligence_cycle():
                 WHERE id = %s
             """, (new_start, json.dumps(history_list), fid))
 
-            print("   ☁️ No Data (stored)")
             continue
 
         # -----------------------------
@@ -207,7 +223,7 @@ def run_intelligence_cycle():
             history_list.pop(0)
 
         # -----------------------------
-        # DATABASE UPDATE
+        # SAVE TO DB
         # -----------------------------
         cur.execute("""
             UPDATE farms
@@ -225,21 +241,27 @@ def run_intelligence_cycle():
         print(f"   {status} | NDVI={current_ndvi:.3f} | Δ={delta:.3f}")
 
         # -----------------------------
-        # ALERT HOOK (READY FOR SMS)
+        # ALERT (READY)
         # -----------------------------
         if alert:
-            print(f"   📩 ALERT READY → {phone}")
-            # send_sms(phone, f"FarmSight Alert: {status} for {name}")
+            print(f"   📩 ALERT READY FOR {phone}")
 
     conn.commit()
     cur.close()
     conn.close()
 
-    print("\n🏁 Cycle Complete")
+    print("\n🏁 ENGINE COMPLETE")
 
 
 # -----------------------------
-# ENTRY POINT
+# ENTRY POINT (NON-NEGOTIABLE)
 # -----------------------------
 if __name__ == "__main__":
-    run_intelligence_cycle()
+    print("🚀 ENGINE BOOTING...")
+
+    try:
+        run_intelligence_cycle()
+        print("✅ ENGINE FINISHED SUCCESSFULLY")
+    except Exception as e:
+        print(f"❌ CRITICAL FAILURE: {e}")
+        sys.exit(1)
