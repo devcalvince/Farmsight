@@ -2,7 +2,6 @@ import ee
 import json
 import os
 import sys
-import base64
 from google.oauth2 import service_account
 from datetime import datetime, timedelta
 
@@ -21,7 +20,7 @@ MODE = os.getenv("MODE", "SIMULATION")
 
 
 # -----------------------------
-# 🔐 GEE AUTH (AUTO-DETECT RAW OR BASE64)
+# 🔐 GEE AUTH (HARDENED)
 # -----------------------------
 def authenticate_gee():
     try:
@@ -29,11 +28,11 @@ def authenticate_gee():
 
         raw = os.environ.get("GEE_JSON_KEY")
         if not raw:
-            raise ValueError("GEE_JSON_KEY missing")
+            raise ValueError("GEE_JSON_KEY missing in Environment Variables")
 
         raw = raw.strip()
 
-        # Try to parse; if it fails, fix common GitHub Secret formatting issues
+        # Fix common GitHub Secret formatting issues
         try:
             info = json.loads(raw)
         except json.JSONDecodeError:
@@ -41,15 +40,14 @@ def authenticate_gee():
             fixed = raw.replace("\r", "").replace("\n", "\\n")
             info = json.loads(fixed)
 
-        # ✅ THE CRITICAL ADDITION: Define the scopes for GEE
+        # ✅ EXACT SCOPES (Must be these specific URLs)
         scopes = [
-            'https://googleapis.com',
-            'https://googleapis.com'
+            "https://googleapis.com",
+            "https://googleapis.com"
         ]
 
-        # Use 'from_service_account_info' with the explicit scopes
         credentials = service_account.Credentials.from_service_account_info(
-            info, 
+            info,
             scopes=scopes
         )
 
@@ -65,7 +63,7 @@ def authenticate_gee():
         raise
 
 # -----------------------------
-# 🌱 NDVI ENGINE (IMPROVED)
+# 🌱 NDVI ENGINE
 # -----------------------------
 def get_smart_ndvi(geojson_obj, start_date, end_date):
     try:
@@ -73,42 +71,28 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
             return None
 
         g_type = geojson_obj.get("type")
-
         if g_type == "Polygon":
             area = ee.Geometry.Polygon(geojson_obj["coordinates"])
         elif g_type == "MultiPolygon":
             area = ee.Geometry.MultiPolygon(geojson_obj["coordinates"])
         else:
-            print("❌ Invalid geometry type")
             return None
-
-        print(f"   🛰 Window: {start_date} → {end_date}")
 
         collection = (
             ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
             .filterBounds(area)
-            .filterDate(
-                start_date.strftime("%Y-%m-%d"),
-                end_date.strftime("%Y-%m-%d"),
-            )
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 90))
+            .filterDate(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 80))
         )
 
-        size = collection.size().getInfo()
-        print(f"   📡 Images found: {size}")
-
-        if size == 0:
+        if collection.size().getInfo() == 0:
             return None
 
         def mask(img):
             qa = img.select("QA60")
-            cloud = qa.bitwiseAnd(1 << 10).eq(0)
-            cirrus = qa.bitwiseAnd(1 << 11).eq(0)
-            return img.updateMask(cloud.And(cirrus))
+            return img.updateMask(qa.bitwiseAnd(1 << 10).eq(0).And(qa.bitwiseAnd(1 << 11).eq(0)))
 
-        # 🔥 USE MEDIAN (more stable than first())
         image = collection.map(mask).median()
-
         ndvi = image.normalizedDifference(["B8", "B4"]).rename("nd")
 
         result = ndvi.reduceRegion(
@@ -118,11 +102,7 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
             maxPixels=1e9
         )
 
-        value = result.get("nd").getInfo()
-
-        print(f"   🌱 NDVI: {value}")
-
-        return value
+        return result.get("nd").getInfo()
 
     except Exception as e:
         print(f"⚠️ NDVI ERROR: {e}")
@@ -134,11 +114,8 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
 # -----------------------------
 def run_intelligence_cycle():
     print("\n🚀 ENGINE STARTING...")
-    print(f"🌍 MODE: {MODE}")
-
     authenticate_gee()
 
-    print("📡 Connecting DB...")
     conn = database.connect_db(settings.DB_URL)
     cur = conn.cursor()
 
@@ -151,120 +128,42 @@ def run_intelligence_cycle():
     farms = cur.fetchall()
     print(f"📊 Farms found: {len(farms)}")
 
-    if len(farms) == 0:
-        print("❌ No farms found in database")
-        return
-
     for fid, name, geojson_str, last_date, history, phone in farms:
-
         print(f"\n👨‍🌾 Processing: {name}")
 
-        # -----------------------------
-        # TIME ENGINE
-        # -----------------------------
-        if MODE == "SIMULATION":
-            base_date = last_date if last_date else datetime(2023, 1, 1).date()
-            step = 3
-        else:
-            base_date = last_date if last_date else (datetime.utcnow().date() - timedelta(days=7))
-            step = 1
-
-        new_start = base_date + timedelta(days=step)
+        base_date = last_date if last_date else datetime(2023, 1, 1).date()
+        new_start = base_date + timedelta(days=5)
         new_end = new_start + timedelta(days=10)
 
-        print(f"   ⏳ Window: {new_start} → {new_end}")
-
-        geojson = json.loads(geojson_str)
-        current_ndvi = get_smart_ndvi(geojson, new_start, new_end)
-
+        current_ndvi = get_smart_ndvi(json.loads(geojson_str), new_start, new_end)
         history_list = list(history) if history else []
 
-        # -----------------------------
-        # NO DATA
-        # -----------------------------
         if current_ndvi is None:
-            print("   ☁️ No NDVI data")
-
-            history_list.append({
-                "date": str(new_start),
-                "ndvi": None
-            })
+            print("   ☁️ No Data")
+            history_list.append({"date": str(new_start), "ndvi": None})
+        else:
+            # Trend Analysis
+            prev = next((h["ndvi"] for h in reversed(history_list) if isinstance(h, dict) and h.get("ndvi") is not None), None)
+            delta = current_ndvi - prev if prev is not None else 0
+            
+            status = "🚨 DROPPING" if delta < -0.10 else "📈 IMPROVING" if delta > 0.08 else "✅ STABLE"
+            
+            history_list.append({"date": str(new_start), "ndvi": round(current_ndvi, 3)})
+            if len(history_list) > 15: history_list.pop(0)
 
             cur.execute("""
-                UPDATE farms
-                SET last_processed_date = %s,
-                    ndvi_history = %s
-                WHERE id = %s
-            """, (new_start, json.dumps(history_list), fid))
-
-            continue
-
-        # -----------------------------
-        # TREND LOGIC
-        # -----------------------------
-        prev = None
-        for h in reversed(history_list):
-            if isinstance(h, dict) and h.get("ndvi") is not None:
-                prev = h["ndvi"]
-                break
-
-        delta = current_ndvi - prev if prev is not None else 0
-
-        if delta < -0.10:
-            status = "🚨 DROPPING"
-            alert = True
-        elif delta > 0.08:
-            status = "📈 IMPROVING"
-            alert = False
-        else:
-            status = "✅ STABLE"
-            alert = False
-
-        # -----------------------------
-        # SAVE
-        # -----------------------------
-        history_list.append({
-            "date": str(new_start),
-            "ndvi": round(current_ndvi, 3)
-        })
-
-        if len(history_list) > 15:
-            history_list.pop(0)
-
-        cur.execute("""
-            UPDATE farms
-            SET last_ndvi = %s,
-                last_processed_date = %s,
-                ndvi_history = %s
-            WHERE id = %s
-        """, (
-            current_ndvi,
-            new_start,
-            json.dumps(history_list),
-            fid
-        ))
-
-        print(f"   {status} | NDVI={current_ndvi:.3f} | Δ={delta:.3f}")
-
-        if alert:
-            print(f"   📩 ALERT READY → {phone}")
+                UPDATE farms SET last_ndvi = %s, last_processed_date = %s, ndvi_history = %s WHERE id = %s
+            """, (current_ndvi, new_start, json.dumps(history_list), fid))
+            print(f"   {status} | NDVI={current_ndvi:.3f} | Δ={delta:.3f}")
 
     conn.commit()
     cur.close()
     conn.close()
+    print("\n🏁 CYCLE COMPLETE")
 
-    print("\n🏁 ENGINE COMPLETE")
-
-
-# -----------------------------
-# ENTRY POINT (NON-NEGOTIABLE)
-# -----------------------------
 if __name__ == "__main__":
-    print("🚀 BOOTING FARMSIGHT ENGINE...")
-
     try:
         run_intelligence_cycle()
-        print("✅ SUCCESS")
     except Exception as e:
-        print(f"❌ FATAL ERROR: {e}")
+        print(f"❌ FATAL: {e}")
         sys.exit(1)
