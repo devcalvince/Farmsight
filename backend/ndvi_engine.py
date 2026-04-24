@@ -20,19 +20,18 @@ MODE = os.getenv("MODE", "SIMULATION")
 
 
 # -----------------------------
-# GEE AUTHENTICATION
+# GEE AUTH (MATCHES GITHUB ACTIONS)
 # -----------------------------
 def authenticate_gee():
     try:
         print("🔐 Authenticating GEE...")
 
-        json_key = os.environ.get("GEE_JSON_KEY")
-        if not json_key:
-            raise ValueError("GEE_JSON_KEY missing")
+        key_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
 
-        info = json.loads(json_key.replace("\\n", "\n"))
+        if not key_path or not os.path.exists(key_path):
+            raise ValueError("❌ Service account key file NOT FOUND")
 
-        credentials = service_account.Credentials.from_service_account_info(info)
+        credentials = service_account.Credentials.from_service_account_file(key_path)
 
         ee.Initialize(
             credentials=credentials,
@@ -47,7 +46,7 @@ def authenticate_gee():
 
 
 # -----------------------------
-# NDVI CALCULATION
+# NDVI ENGINE
 # -----------------------------
 def get_smart_ndvi(geojson_obj, start_date, end_date):
     try:
@@ -61,7 +60,7 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
         elif g_type == "MultiPolygon":
             area = ee.Geometry.MultiPolygon(geojson_obj["coordinates"])
         else:
-            print("❌ Invalid geometry")
+            print("❌ Invalid geometry type")
             return None
 
         print(f"   🛰 Fetching imagery {start_date} → {end_date}")
@@ -82,7 +81,9 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
         if size == 0:
             return None
 
-        # Cloud mask
+        # -----------------------------
+        # CLOUD MASKING
+        # -----------------------------
         def mask(img):
             qa = img.select("QA60")
             mask = qa.bitwiseAnd(1 << 10).eq(0).And(
@@ -95,6 +96,9 @@ def get_smart_ndvi(geojson_obj, start_date, end_date):
             .sort("CLOUDY_PIXEL_PERCENTAGE")
             .first()
         )
+
+        if image is None:
+            return None
 
         ndvi = image.normalizedDifference(["B8", "B4"]).rename("nd")
 
@@ -142,6 +146,9 @@ def run_intelligence_cycle():
         print("❌ NO FARMS FOUND → CHECK DATABASE")
         return
 
+    # -----------------------------
+    # LOOP THROUGH FARMS
+    # -----------------------------
     for fid, name, geojson_str, last_date, history, phone in farms:
 
         print(f"\n👨‍🌾 Processing: {name}")
@@ -157,7 +164,9 @@ def run_intelligence_cycle():
             step = 1
 
         new_start = base_date + timedelta(days=step)
-        new_end = new_start + timedelta(days=10)
+
+        # 🔥 BIG FIX: Wider search window
+        new_end = new_start + timedelta(days=20)
 
         print(f"   ⏳ Window: {new_start} → {new_end}")
 
@@ -241,10 +250,11 @@ def run_intelligence_cycle():
         print(f"   {status} | NDVI={current_ndvi:.3f} | Δ={delta:.3f}")
 
         # -----------------------------
-        # ALERT (READY)
+        # ALERT HOOK (READY)
         # -----------------------------
         if alert:
             print(f"   📩 ALERT READY FOR {phone}")
+            # send_sms(phone, f"FarmSight Alert: {status} for {name}")
 
     conn.commit()
     cur.close()
@@ -254,7 +264,7 @@ def run_intelligence_cycle():
 
 
 # -----------------------------
-# ENTRY POINT (NON-NEGOTIABLE)
+# ENTRY POINT (CRITICAL)
 # -----------------------------
 if __name__ == "__main__":
     print("🚀 ENGINE BOOTING...")
