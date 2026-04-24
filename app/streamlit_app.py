@@ -1,5 +1,5 @@
 # -----------------------------
-# IMPORT FIX (CRITICAL FOR RENDER)
+# IMPORT FIX (RENDER SAFE)
 # -----------------------------
 import sys
 import os
@@ -13,33 +13,37 @@ import streamlit as st
 import psycopg2
 import pandas as pd
 import json
+import plotly.express as px
+
 from config import settings
 from backend import database
-import plotly.express as px
 from backend.weather_engine import get_irrigation_advice
 
 # -----------------------------
-# CACHE (SAVE API CALLS)
-# -----------------------------
-@st.cache_data(ttl=3600)
-def cached_irrigation_advice(lon, lat):
-    return get_irrigation_advice(lon, lat)
-
-# -----------------------------
-# PAGE CONFIG
+# PAGE CONFIG (MUST BE FIRST STREAMLIT CALL)
 # -----------------------------
 st.set_page_config(page_title="FarmSight Dashboard", layout="wide")
 
 st.title("🌾 FarmSight Agricultural Intelligence Dashboard")
 
 # -----------------------------
-# DATABASE CONNECTION
+# CACHE WEATHER
+# -----------------------------
+@st.cache_data(ttl=3600)
+def cached_irrigation_advice(lon, lat):
+    return get_irrigation_advice(lon, lat)
+
+# -----------------------------
+# DB CONNECTION
 # -----------------------------
 conn = database.connect_db(settings.DB_URL)
 cur = conn.cursor()
 
 cur.execute("""
-    SELECT id, farmer_name, crop_type, ST_AsGeoJSON(geom), last_ndvi, ndvi_history
+    SELECT id, farmer_name, crop_type,
+           ST_AsGeoJSON(geom),
+           last_ndvi,
+           ndvi_history
     FROM farms;
 """)
 
@@ -50,17 +54,15 @@ alert_logs = []
 ndvi_series = {}
 
 # -----------------------------
-# PROCESS DATA
+# SAFE GEO + DATA PROCESSING
 # -----------------------------
-for farm in farm_data:
-    fid, name, crop, geojson_str, last_ndvi, history = farm
+for fid, name, crop, geojson_str, last_ndvi, history in farm_data:
 
     geo = json.loads(geojson_str)
 
-    # -----------------------------
-    # SAFE CENTROID CALCULATION
-    # -----------------------------
+    # SAFE CENTROID (Polygon only MVP-safe version)
     coords = geo["coordinates"][0]
+
     lons = [c[0] for c in coords]
     lats = [c[1] for c in coords]
 
@@ -68,20 +70,25 @@ for farm in farm_data:
     lat = sum(lats) / len(lats)
 
     farm_locations.append({
-        "id": fid,
         "farmer": name,
-        "crop": crop,
         "lat": lat,
         "lon": lon,
         "ndvi": last_ndvi or 0
     })
 
     # -----------------------------
-    # NDVI HISTORY (FOR CHART)
+    # NDVI HISTORY NORMALIZATION
     # -----------------------------
     if history:
         try:
-            ndvi_series[name] = history
+            # Accept BOTH formats safely
+            if isinstance(history[0], dict):
+                ndvi_series[name] = history
+            else:
+                ndvi_series[name] = [
+                    {"date": str(i), "ndvi": v}
+                    for i, v in enumerate(history)
+                ]
         except:
             pass
 
@@ -98,7 +105,7 @@ for farm in farm_data:
         status = "🔴 At Risk"
 
     # -----------------------------
-    # WEATHER + IRRIGATION
+    # WEATHER INSIGHT
     # -----------------------------
     try:
         advice = cached_irrigation_advice(lon, lat)
@@ -110,7 +117,7 @@ for farm in farm_data:
         "Crop": crop,
         "NDVI": round(last_ndvi or 0, 3),
         "Status": status,
-        "Irrigation Advice": advice
+        "Irrigation": advice
     })
 
 cur.close()
@@ -136,7 +143,7 @@ col3.metric("📈 Avg NDVI", round(df["ndvi"].mean(), 3) if not df.empty else 0)
 st.divider()
 
 # -----------------------------
-# MAP VIEW
+# MAP
 # -----------------------------
 st.subheader("🗺 Farm Locations")
 
@@ -151,30 +158,32 @@ else:
 st.subheader("📊 NDVI Distribution")
 
 if not df.empty:
-    fig = px.histogram(df, x="ndvi", nbins=10, title="NDVI Spread Across Farms")
+    fig = px.histogram(df, x="ndvi", nbins=10)
     st.plotly_chart(fig, use_container_width=True)
 
 # -----------------------------
-# NDVI TIME SERIES (NEW 🔥)
+# NDVI TRENDS (CLEAN VERSION)
 # -----------------------------
-st.subheader("📈 NDVI Trends (Per Farmer)")
+st.subheader("📈 NDVI Trends")
 
 if ndvi_series:
-    df_history = pd.DataFrame.from_dict(ndvi_series, orient="index").transpose()
-    st.line_chart(df_history)
-else:
-    st.info("No NDVI history available yet.")
+    for name, history in ndvi_series.items():
+        df_hist = pd.DataFrame(history)
+
+        if "date" in df_hist.columns:
+            df_hist["date"] = pd.to_datetime(df_hist["date"])
+            df_hist = df_hist.sort_values("date")
+            st.write(f"👨‍🌾 {name}")
+            st.line_chart(df_hist.set_index("date")["ndvi"])
 
 # -----------------------------
-# ALERT TABLE
+# ALERTS TABLE
 # -----------------------------
-st.subheader("🚨 Farm Insights & Recommendations")
+st.subheader("🚨 Insights")
 
 st.dataframe(df_alerts, use_container_width=True)
 
 # -----------------------------
 # FOOTER
 # -----------------------------
-st.info(
-    "FarmSight converts satellite NDVI + weather data into actionable farming decisions."
-)
+st.info("FarmSight transforms satellite NDVI + weather into actionable farming intelligence.")
